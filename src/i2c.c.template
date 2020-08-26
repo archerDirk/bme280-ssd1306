@@ -1,0 +1,109 @@
+/*
+ * Copyright (C) 2018  SuperGreenLab <towelie@supergreenlab.com>
+ * Author: Constantin Clauzel <constantin.clauzel@gmail.com>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include <stdlib.h>
+#include "i2c.h"
+#include "driver/i2c.h"
+
+#include "../kv/kv.h"
+#include "../log/log.h"
+
+/*
+* [GENERATED]
+*/
+
+<% Object.keys(modules).filter(m => modules[m].enabled).filter(m => modules[m].i2c).forEach(m => { m = modules[m]%>
+#include "../../<%= `${m.name}/${m.name}.h` %>"
+<% }) %>
+
+#define MASTER_TX_BUF_DISABLE  0
+#define MASTER_RX_BUF_DISABLE  0
+#define MASTER_FREQ_HZ         100000
+
+static void loop_devices(int i2cId) {
+  <% Object.keys(modules).filter(m => modules[m].enabled).filter(m => modules[m].i2c).forEach(m => { %>
+  loop_<%= modules[m].name %>(i2cId);
+  vTaskDelay(1000 / portTICK_RATE_MS);
+  <% }) %>
+}
+
+void i2c_task(void *param) {
+  while(true) {
+    <% Array(modules.i2c.array_len).fill().forEach((v, i) => { %>
+    if (get_i2c_enabled(<%= i %>)) {
+      loop_devices(<%= i %>);
+    }
+    <% }) %>
+
+    vTaskDelay(2000 / portTICK_RATE_MS);
+  }
+}
+
+void init_i2c_devices(int i2cId) {
+  <% Object.keys(modules).filter(m => modules[m].enabled).filter(m => modules[m].i2c).forEach(m => { %>
+  init_<%= modules[m].name %>(i2cId);
+  <% }) %>
+}
+
+void init_i2c() {
+  <% Array(modules.i2c.array_len).fill().forEach((v, i) => { %>
+  if (get_i2c_enabled(<%= i %>) == 1) {
+    init_i2c_devices(<%= i %>);
+  }
+  <% }) %>
+  BaseType_t ret = xTaskCreatePinnedToCore(i2c_task, "I2C", 4096, NULL, 10, NULL, 1);
+  if (ret != pdPASS) {
+    ESP_LOGE(SGO_LOG_EVENT, "@I2C Failed to create task");
+  }
+}
+
+static bool i2c_started[] = { <% Array(modules.i2c.array_len).fill().forEach((v, i) => { %>false,<% }) %> };
+
+static void initialize_i2c_port(int i2cId) {
+  int sda = get_i2c_sda(i2cId);
+  int scl = get_i2c_scl(i2cId);
+  int port = get_i2c_port(i2cId);
+
+  ESP_LOGI(SGO_LOG_EVENT, "@I2C Initializing I2C master mode i2cId=%d sda=%d scl=%d port=%d", i2cId, sda, scl, port);
+
+  i2c_started[i2cId] = true;
+  i2c_config_t conf;
+  conf.mode = I2C_MODE_MASTER;
+  conf.sda_io_num = sda;
+  conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+  conf.scl_io_num = scl;
+  conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+  conf.master.clk_speed = MASTER_FREQ_HZ;
+  i2c_param_config(port, &conf);
+  i2c_driver_install(port, conf.mode, MASTER_RX_BUF_DISABLE, MASTER_TX_BUF_DISABLE, 0);
+}
+
+void start_i2c(int i2cId) {
+  if (i2c_started[i2cId]) return;
+
+  if (get_i2c_enabled(i2cId) == 1) {
+    initialize_i2c_port(i2cId);
+  }
+}
+
+void stop_i2c(int i2cId) {
+  if (!i2c_started[i2cId]) return;
+  int port = get_i2c_port(i2cId);
+  i2c_started[i2cId] = false;
+  i2c_driver_delete(port);
+}
